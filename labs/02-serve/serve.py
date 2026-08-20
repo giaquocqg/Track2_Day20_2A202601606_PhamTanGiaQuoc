@@ -69,7 +69,7 @@ def main() -> int:
     try:
         os.execv(cmd[0], cmd)          # hand the terminal over; Ctrl-C stops the server
     except OSError:
-        return subprocess.run(cmd, check=False).returncode
+        return subprocess.run(cmd, cwd=str(labkit.repo_root()), check=False).returncode
 
 
 if __name__ == "__main__":

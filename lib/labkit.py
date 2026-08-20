@@ -24,6 +24,15 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+# Force UTF-8 on stdout and stderr to prevent cp1252 charmap encoding errors on Windows
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 # Pinned llama.cpp release. Gemma 4 (architecture "gemma4", April 2026) needs a
 # build newer than that; this one is well past it. Bump deliberately, not casually.
 LLAMA_CPP_BUILD = "b10488"
@@ -383,10 +392,21 @@ def server_cmd(
     extra: list[str] | None = None,
 ) -> list[str]:
     bin_path = runtime_bin("llama-server")
+    root = repo_root()
+    try:
+        bin_str = str(bin_path.relative_to(root)) if (bin_path and bin_path.is_relative_to(root)) else str(bin_path)
+    except Exception:
+        bin_str = str(bin_path)
+    try:
+        p_model = Path(model)
+        model_str = str(p_model.relative_to(root)) if (p_model.is_absolute() and (p_model == root or root in p_model.parents)) else str(model)
+    except Exception:
+        model_str = str(model)
+
     port = port or (embed_port() if embedding else server_port())
     cmd = [
-        str(bin_path),
-        "-m", str(model),
+        bin_str,
+        "-m", model_str,
         "--host", "127.0.0.1",
         "--port", str(port),
         "-t", str(threads()),
@@ -441,7 +461,7 @@ def serve_bg(model: str, port: int | None = None, embedding: bool = False, quiet
     log_path = repo_root() / "benchmarks" / ".llama-server.log"
     log_path.parent.mkdir(exist_ok=True)
     log = open(log_path, "w") if quiet else None
-    proc = subprocess.Popen(cmd, stdout=log or None, stderr=subprocess.STDOUT if log else None)
+    proc = subprocess.Popen(cmd, cwd=str(repo_root()), stdout=log or None, stderr=subprocess.STDOUT if log else None)
     try:
         if not wait_healthy(port, proc=proc):
             proc.terminate()
@@ -481,10 +501,13 @@ def bench_metric(output: str, metric: str) -> float:
     """
     import re
 
-    m = re.search(rf"\|\s*{re.escape(metric)}\s*\|\s*([0-9.]+)\s*±", output)
+    # Match in markdown table format: | tg128 | 42.09 ± 0.00 |
+    # The ± symbol may be UTF-8 encoded or show as replacement character
+    m = re.search(rf"\|\s*{re.escape(metric)}\s*\|\s*([0-9.]+)", output)
     if m:
         return float(m.group(1))
-    m = re.search(rf"{re.escape(metric)}[^0-9]+([0-9.]+)", output)
+    # Fallback: match anywhere metric name is followed by a number
+    m = re.search(rf"{re.escape(metric)}[^0-9]*([0-9.]+)", output)
     return float(m.group(1)) if m else 0.0
 
 
@@ -500,19 +523,42 @@ def bench_all_pp(output: str) -> list[tuple[int, float]]:
 
 def run_bench(args: list[str], timeout: int = 1800) -> str:
     bin_path = runtime_bin("llama-bench")
+    root = repo_root()
+    clean_args = []
+    for arg in args:
+        try:
+            p = Path(arg)
+            if p.is_absolute() and (p == root or root in p.parents):
+                clean_args.append(str(p.relative_to(root)))
+            else:
+                clean_args.append(arg)
+        except Exception:
+            clean_args.append(arg)
+    try:
+        bin_cmd = str(bin_path.relative_to(root)) if (bin_path and bin_path.is_relative_to(root)) else str(bin_path)
+    except Exception:
+        bin_cmd = str(bin_path)
+
     proc = subprocess.run(
-        [str(bin_path)] + args, capture_output=True, text=True, check=False, timeout=timeout
+        [bin_cmd] + clean_args,
+        cwd=str(root),
+        capture_output=True,
+        check=False,
+        timeout=timeout,
     )
-    return proc.stdout + proc.stderr
+    # Decode as UTF-8, replacing invalid bytes (llama-bench outputs UTF-8 including ± symbol)
+    stdout = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
+    stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+    return stdout + stderr
 
 
 # ─────────────────────────────────────────────────────────── reports
 
 def write_report(filename: str, markdown: str, data: object | None = None) -> Path:
     out = bench_dir() / filename
-    out.write_text(markdown)
+    out.write_text(markdown, encoding="utf-8")
     if data is not None:
-        out.with_suffix(".json").write_text(json.dumps(data, indent=2))
+        out.with_suffix(".json").write_text(json.dumps(data, indent=2), encoding="utf-8")
     return out
 
 
@@ -534,7 +580,7 @@ def die(*lines: str) -> None:
 
 
 def banner(title: str) -> None:
-    print(f"\n{'─' * 64}\n  {title}\n{'─' * 64}")
+    print(f"\n{'=' * 64}\n  {title}\n{'=' * 64}")
 
 
 def host_tag() -> str:
