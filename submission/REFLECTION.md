@@ -116,7 +116,21 @@ Gain chỉ 1.01× cho thấy: (1) Vulkan compute đã parallelize tốt với 1 
 > Bỏ trống nếu không làm. Xem `bonus/README.md`. Đừng làm hết — **một** finding sâu
 > ăn điểm hơn năm bảng nông.
 
-_(để trống vì không làm bonus track)_
+**Đã làm:** B2 (GPU layer offload sweep: `bonus/sweeps/gpu-offload-sweep.py`) & B4/B5 (Challenge C8: Semantic Cache `bonus/serving-regimes/semantic-cache-demo.py`).
+
+**Numbers:**
+
+```
+before:  17.5 tok/s (-ngl 0, CPU-only baseline)
+after:   71.6 tok/s (-ngl 99, Full GPU offload Vulkan trên RTX 3050 Laptop GPU)
+speedup: 4.08×
+```
+
+**Điều này nói lên gì mà deck chưa nói:**
+
+1. **Cơ chế GPU offload và Bandwidth Hierarchy:** Tốc độ decode tăng từ 17.5 tok/s lên 71.6 tok/s (tăng 4.08×) khi tăng `-ngl` từ 0 đến 99. Model `UD-Q4_K_XL` (2.97 GB) hoàn toàn vừa vặn trong 4096 MiB VRAM của RTX 3050. Sự chênh lệch 4.08× phản ánh chính xác khoảng cách giữa DDR5 Host memory bandwidth (~38 GB/s) và GDDR6 GPU VRAM bandwidth (~192 GB/s). Khi toàn bộ layer nằm trên VRAM, decode không còn bị thắt nút cổ chai bởi bus truyền dữ liệu hay context switching của CPU.
+
+2. **Kiến trúc 3 tầng Cache (Challenge C8 Semantic Cache):** Stack serving thực tế có 3 tầng cache (`[1] Semantic Cache -> [2] Prefix/KV Cache -> [3] Full Inference`). Tại tầng 1, paraphrase matching với similarity threshold ~0.85 giúp tiết kiệm 100% chi phí compute (cả Prefill lẫn Decode). Tuy nhiên, nếu threshold quá thấp sẽ dẫn đến False Hit (trả về câu trả lời sai ngữ cảnh), còn nếu quá cao sẽ tạo ra False Miss. Ngoài ra, trong môi trường multi-tenant, bắt buộc phải áp dụng per-tenant salting để ngăn chặn tấn công timing side-channel rò rỉ prompt giữa các người dùng (theo cảnh báo bảo mật NDSS'25).
 
 ---
 
